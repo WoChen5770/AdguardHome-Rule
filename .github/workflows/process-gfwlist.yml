@@ -1,0 +1,85 @@
+name: Process GFWList
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # 每天UTC时间午夜运行
+
+jobs:
+  process-gfwlist:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 检出仓库
+      uses: actions/checkout@v3
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
+
+    - name: 处理GFWList
+      run: |
+        import base64
+        import re
+        import requests
+        from urllib.parse import urlparse
+        
+        # 下载gfwlist
+        print("正在下载gfwlist.txt...")
+        response = requests.get('https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt')
+        response.raise_for_status()
+        
+        # 解码base64内容
+        print("正在解码base64内容...")
+        decoded_content = base64.b64decode(response.text).decode('utf-8')
+        
+        # 提取域名
+        domains = set()
+        for line in decoded_content.split('\n'):
+            line = line.strip()
+            # 跳过注释和空行
+            if not line or line.startswith('!') or line.startswith('[') or line.startswith('@'):
+                continue
+                
+            # 移除协议和路径
+            domain = line
+            if '://' in domain:
+                domain = domain.split('://', 1)[1]
+            if '/' in domain:
+                domain = domain.split('/', 1)[0]
+            if ':' in domain:
+                domain = domain.split(':', 1)[0]
+                
+            # 移除通配符等特殊字符
+            domain = domain.replace('*.', '').replace('.*', '').strip()
+            
+            # 验证域名
+            if domain and not domain.startswith(('.', '/', '|', '||')) and not any(c in domain for c in '?*^$'):
+                domains.add(domain.lower())
+        
+        # 排序域名
+        sorted_domains = sorted(domains)
+        
+        # 保存到文件
+        with open('gfwlist_domains.txt', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(sorted_domains))
+            
+        print(f"成功提取 {len(sorted_domains)} 个唯一域名。")
+      
+    - name: 提交更改
+      run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'actions@github.com'
+        git add gfwlist_domains.txt
+        git diff --quiet && git diff --staged --quiet || (git commit -m "更新gfwlist域名列表" && git push)
+
+    - name: 上传域名文件
+      uses: actions/upload-artifact@v3
+      with:
+        name: gfwlist-domains
+        path: gfwlist_domains.txt
